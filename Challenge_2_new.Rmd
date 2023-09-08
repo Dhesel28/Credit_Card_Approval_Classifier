@@ -1,0 +1,560 @@
+---
+title: 'Credit Card Approval Classifer'
+subtitle: 'Dhesel Khando'
+output:
+  pdf_document:
+    fig_height: 3
+    fig_width: 4.5
+  html_document: default
+  word_document: default
+geometry: "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm"
+editor_options: 
+  chunk_output_type: console
+header-includes:
+   - \usepackage{dcolumn}
+---
+```{r,setup,include = FALSE}
+#library 
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+library(tidyverse)
+library(tidymodels)
+library(dslabs)
+tidymodels_prefer(quiet=TRUE)
+library(rpart)
+library(rpart.plot)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(car)         # for vif()
+library(ggResidpanel)
+library(infer)
+library(skimr)
+library(tidyverse)
+library(ggformula) 
+library(psych)
+library(ggthemes)
+library(scales)
+```
+
+## __Introduction__	
+
+The credit card is a crucial financial tool for individuals and businesses, providing a convenient and widely accepted method of payment with various benefits such as cashback rewards and travel points. However, obtaining a credit card can be challenging for those without a credit history, resulting in limited credit lines or rejections that make it difficult to make large purchases. As an international student, I faced similar difficulties in obtaining my first credit card due to my non-US citizenship and lack of credit score. Credit scores are widely used by financial institutions to assess the likelihood of future defaults and credits and allows bank to make informed decisions on approving credit card applications.
+
+The objective of this project is to identify key factors considered by credit card companies when approving or rejecting applicants, such as gender, age, debt history, marital status, bank customer status, income, employment status, ethnicity, prior default, credit score, driver's license status, citizenship, zip code, and income. Through analyzing these factors, we can classify credit card approval and provide recommendations to improve approval chances. The project will test two models, Lasso Classification and Random Forest, and compare the results.
+
+The data for this project was obtained from the UC Irvine Machine Learning Repository on credit card approvals. To maintain confidentiality, attribute names and values have been anonymized. For the ease of use and analysis, I utilized a dataset from Kaggle created by Samuel Cortinhas, which has filled missing values and inferred feature and categorical names.Based on the research conducted by Harsha Vardhan Peela and colleagues, the features "Zipcode" and "Driver License" were found to be less relevant compared to other features in the dataset. Therefore, following their findings, I removed these features from the analysis.
+
+*https://www.kaggle.com/datasets/samuelcortinhas/credit-card-approval-clean-data*
+
+The data contains 689 rows and 14 attributes.
+
+- **5 Numeric variables** 
+
+1. **\textcolor{red}{Age}**: the age of the applicants in years 
+2. **\textcolor{red}{Debt}** : the outstanding debt of the applicants
+3. **\textcolor{red}{Years Employed}**: the years applicants have been employed
+4. **\textcolor{red}{Credit Score}**: the credit score of applicants
+5. **\textcolor{red}{Income}** : the income of applicants in dollar
+
+
+- **9 Categorical variables**
+
+1. **\textcolor{red}{Gender}**: 0 = Female and 1 = Male
+2. **\textcolor{red}{Married}**: 0 = Single/divorced/etc and 1 = Married
+3. **\textcolor{red}{Bank Customer}**: 0 = does not have bank account and 1 = has bank account
+4. **\textcolor{red}{Prior Default}** : 0 = no prior defaults, 1 = prior default 
+5. **\textcolor{red}{Approved}** : 0 = not approved and 1 = approved
+6. **\textcolor{red}{Citizen}** : Citizenship either 
+7. **\textcolor{red}{Industry}** : 14 different job sector of current or most recent job : Communication Services, Consumer Discretionary, Consumer Staples, Education, Energy,Financials,Healthcare, Industrials         , Information Technology, Materials, Real Estate, Research, Transport and Utilities
+8. **\textcolor{red}{Ethnicity}** : 5 different Ethnicity of applicants  : Asian, Black, Latino, White and Other.
+9. **\textcolor{red}{Employed}** : 0 = not employed and 1 = employed
+
+```{r}
+credit_dataset <- read_csv("~/Mscs 341 S23/Submit Section B/Challenge_2/clean_dataset.csv")
+dim(credit_dataset)
+```
+
+
+## __Exploratory Data Analysis__
+
+```{r,echo=FALSE, include=FALSE}
+#factorizing
+credit_dataset <- credit_dataset %>%
+  mutate(
+     Industry = factor(Industry), 
+     Ethnicity = factor(Ethnicity), 
+     Citizen = factor(Citizen), 
+     Approved = factor(Approved, levels = c(1,0)),
+  )
+
+credit_dataset<-credit_dataset%>%
+  select(-"ZipCode", "DriversLicense")
+
+```
+
+```{r,echo=FALSE, fig.height = 6, fig.width = 10}
+credit_dataset %>%
+  select(Age, YearsEmployed, Debt, CreditScore, Income) %>%
+  pairs()+
+  title("Relationships Between Numeric Variables")
+```
+
+In examining relationships between the numeric variables, we can observe some positive linear associations with Age and YearsEmployed, Age and Debt, YearsEmployed and Debt.
+
+
+```{r,include=FALSE}
+plotdata <- credit_dataset %>%
+  group_by(Gender, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+graph_1<-ggplot(plotdata, 
+       aes(x = factor(Gender,
+                      levels = c(1,0),
+                      labels = c("Male","Female")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill", show.legend = FALSE) +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Gender",
+       title = "Credit Card Approval by Gender") +
+  theme_minimal()
+```
+
+
+```{r,include=FALSE} 
+plotdata_2 <- credit_dataset %>%
+  group_by(Employed, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+graph_2<-ggplot(plotdata_2, 
+       aes(x = factor(Employed,
+                      levels = c(1,0),
+                      labels = c("Employed","Unemployed")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Employed",
+       title = "Credit Card Approval by Employed") +
+  theme_minimal()
+```
+
+```{r,include=FALSE}
+plotdata_3 <- credit_dataset %>%
+  group_by(Married, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+graph_3<-ggplot(plotdata_3, 
+       aes(x = factor(Married,
+                      levels = c(1,0),
+                      labels = c("Married","Single/Divorced/other")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill",show.legend = FALSE) +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Marital Status",
+       title = "Credit Card Approval by Marital Status") +
+  theme_minimal()
+```
+
+```{r,include=FALSE}
+plotdata_4 <- credit_dataset %>%
+  group_by(BankCustomer, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+graph_4<-ggplot(plotdata_4, 
+       aes(x = factor(BankCustomer,
+                      levels = c(1,0),
+                      labels = c("Has Bank Account","Does not have bank account")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill", show.legend = FALSE) +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "BankCustomer",
+       title = "Credit Card Approval by whether applicant own bank account") +
+  theme_minimal()
+```
+
+
+```{r,include=FALSE}
+plotdata_5 <- credit_dataset %>%
+  group_by(PriorDefault, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+
+graph_5<-ggplot(plotdata_5, 
+       aes(x = factor(PriorDefault,
+                      levels = c(1,0),
+                      labels = c("No Prior Defaults","Prior Default")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Prior Default",
+       title = "Credit Card Approval by whether applicant has Prior Default") +
+  theme_minimal()
+```
+
+
+
+```{r,include=FALSE}
+
+plotdata_6 <- credit_dataset %>%
+  group_by(Ethnicity, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+
+graph_6<-ggplot(plotdata_6, 
+       aes(x = factor(Ethnicity,
+                      levels = c("White", "Asian",  "Black",  "Latino", "Other")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Ethnicity",
+       title = "Credit Card Approval by Ethnicity") +
+  theme_minimal()
+
+```
+
+```{r,include=FALSE}
+
+plotdata_7 <- credit_dataset %>%
+  group_by(Industry, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+graph_7<-ggplot(plotdata_7, 
+       aes(x = factor(Industry,
+                      levels = c("CommunicationServices", "ConsumerDiscretionary","ConsumerStaples",    "Education","Energy","Financials","Healthcare","Industrials","InformationTechnology","Materials","Real Estate","Research","Transport" ,"Utilities")),
+           y = pct,
+           fill = factor(Approved, 
+                         levels = c(1,0),
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Industry",
+       title = "Credit Card Approval by Industry") +
+  theme_minimal()
+```
+
+```{r,include=FALSE}
+plotdata_8 <- credit_dataset %>%
+  group_by(Citizen, Approved) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+graph_8<-ggplot(plotdata_8, 
+       aes(x = factor(Citizen,
+                      levels = c("ByBirth","ByOtherMeans","Temporary" )),
+           y = pct,
+           fill = factor(Approved, 
+                         labels = c("Approved",
+                                    "Rejected")))) + 
+  geom_bar(stat = "identity",
+           position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+  geom_text(aes(label = lbl), 
+            size = 3, 
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent", 
+       fill = "Approval",
+       x = "Citizen",
+       title = "Credit Card Approval by Citizenship") +
+  theme_minimal()
+```
+
+
+```{r, echo=FALSE,fig.height = 10, fig.width = 15}
+library(ggpubr)
+ggarrange(graph_1, graph_2, graph_3,graph_4, ncol = 2, nrow = 2)
+
+```
+
+Based on this visualization of four attributes for credit card approval, it appears that there isn't a significant difference between genders in terms of approval rates. However, being employed increases the likelihood of being approved for a credit card, while being unemployed results in a similar percentage of rejections. Regarding marital status, single, divorced, and other applicants are more likely to be rejected for a credit card compared to married individuals. Additionally, individuals who are bank customers are less likely to be rejected than those without a bank account.
+
+```{r, echo=FALSE,fig.height = 10, fig.width = 15}
+ggarrange(graph_5, graph_6,graph_8, ncol = 2, nrow = 2)
+```
+
+```{r,echo=FALSE}
+credit_dataset%>%
+  group_by(Ethnicity)%>%
+  summarise(n = n(),
+            prop = n/690)%>%
+  arrange(desc(n))
+
+credit_dataset%>%
+  group_by(Citizen)%>%
+  summarise(n = n(),
+            prop = n/690)%>%
+  arrange(desc(n))
+```
+
+According to this visualization, individuals who have defaulted previously have a rejection rate of 93% for credit cards, whereas those with no prior defaults have a 79% chance of being approved. In terms of credit card approval by ethnicity, there are five groups: White, Asian, Black, Latino, and others. The bar graph shows that the Black ethnicity is most likely to be approved for a credit card (63%), followed by other ethnicities, White, and Asian with equal acceptance rates. Latinos have the lowest approval rate for credit cards. It's worth noting that approximately 60% of the applicants in the data set are White, 20% are Black, around 9% are Asian, approximately 8% are Latino, and the rest make up 4% of the data set. Additionally, individuals with temporary citizenship are more than 60% likely to be approved for credit cards than their counterparts. The citizenship category that is most likely to be rejected is citizenship acquired through other means, with a rate of 26%. It's also worth noting that about 90% of credit card applicants were born in the USA, while only 1% of credit card applicants have temporary citizenship.
+
+```{r,echo=FALSE, fig.height = 13, fig.width = 20}
+graph_7
+```
+
+According to this bar plot, the industry with the highest credit card approval rate is Utilities, with an acceptance rate of 84%, followed by Information Technology, with a 71% approval rate. Healthcare has the lowest approval rate for credit cards, with only a 13% rate of approval.
+
+
+## __Modeling__
+
+Before modeling, let's separate the entire dataset into training a nd test data sets. Using 70% of the data for the training dataset gives us a training set with 482 observations and a testing set with 208 observations 
+
+```{r echo=TRUE, results=TRUE}
+set.seed(12345)
+credit_split <- initial_split(credit_dataset, prop=0.70)
+credit_train_tbl <- training(credit_split)
+credit_test_tbl <- testing(credit_split)
+```
+
+### __Lasso Classification__
+
+We use lasso classification on the entire data set to determine which variables are the most important. In lasso regularisation technique, we use $\lambda$ as a penalty term so that the coefficeints for unimportant variables are driven to zero. To find the optimal $\lambda$, we will use cross validation with ten folds. 
+
+```{r}
+credit_model <- 
+  logistic_reg(mixture = 1, penalty=tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+
+credit_recipe <- 
+  recipe(formula = Approved ~ ., data = credit_train_tbl) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors())
+
+credit_wf <- workflow() %>% 
+  add_recipe(credit_recipe) %>% 
+  add_model(credit_model)
+
+set.seed(1234)
+credit_fold_10 <- vfold_cv(credit_train_tbl, v = 10)
+
+penalty_grid <-
+  grid_regular(penalty(range = c(-2, 0)), levels = 20)
+
+tune_res <- tune_grid(
+  credit_wf,
+  resamples = credit_fold_10, 
+  grid = penalty_grid
+)
+autoplot(tune_res, metric ="accuracy")
+
+show_best(tune_res, metric = "accuracy")
+(best_penalty <- select_best(tune_res, metric = "accuracy"))
+
+credit_final_wf <- finalize_workflow(credit_wf, best_penalty)
+credit_final_fit <- fit(credit_final_wf, data = credit_train_tbl)
+
+```
+So it chose 0.0127 as the best penalty. We can finalise our model and find out the most important variables for this classification.
+
+```{r,echo=FALSE}
+library(vip)
+extract_fit_parsnip(credit_final_fit) %>%
+  vip()
+```
+
+According to the vip (variables importance) bar chart of the Lasso Classification model, Income, PriorDefault, BankCustomer, Married and Industry_Healthcareare are the top 5 most important variables for predicting the credit card approval.
+
+```{r,echo=FALSE}
+augment_approved<-augment(credit_final_fit, new_data = credit_test_tbl)
+
+augment_approved %>%
+  conf_mat(truth = Approved, estimate = .pred_class, event_level = "second")
+```
+
+The accuracy for this model is 0.832 which is decent but not great. Looking at the confusion matrix and also the specificity and sensitivity, we can see that model is doing better for sensitivity but worse for specificity. It means that our model is better at correctly classifying approved cases but not declined cases. To balance it out, we can create an roc tibble and select the appropriate threshold.
+
+```{r,echo=FALSE}
+class_metric <- metric_set(accuracy, sens, spec)
+
+augment_approved %>%
+  class_metric(truth = Approved, estimate = .pred_class)
+
+roc_tbl <- roc_curve(augment_approved, Approved,
+.pred_1)
+
+roc_tbl %>%
+filter(between(specificity - sensitivity, 0.01, 0.02))
+autoplot(roc_tbl)
+```
+
+Since we want specificity to match with sensitivity, we choose the threshold of 0.58. 
+
+```{r,echo=FALSE}
+augment_approved<-augment_approved%>%
+  mutate(.pred_diff = ifelse(.pred_1 > 0.58, 1, 0))
+
+augment_approved <- augment_approved%>%
+  mutate(.pred_diff = factor(.pred_diff, levels =c(1,0)))
+
+augment_approved %>%
+  class_metric(truth = Approved, estimate = .pred_diff)
+
+augment_approved %>%
+  conf_mat(truth = Approved, estimate = .pred_diff)
+```
+
+With this modification, the accuracy remains unchanged at 0.832, however specificity is better now. 
+
+
+### __Random Forest__
+
+The Random Forest model selects a random combination of variables at each level of the decision tree to ensure that distinct trees are unrelated. This experiment has a fixed number of 1000 trees, and the 10-folds cross validation will determine the optimal number of predictors (mtry) and minimum number of samples (min_n) for optimal accuracy.
+
+```{r}
+forest_recipe <-
+  recipe(Approved ~ ., data = credit_train_tbl)%>%
+  step_normalize() %>%
+  step_dummy(all_nominal_predictors())
+
+forest_model <-
+  rand_forest(trees = 1000, mtry = tune(), min_n = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("ranger", importance = "impurity")
+
+forest_workflow <-
+  workflow() %>%
+  add_recipe(forest_recipe) %>%
+  add_model(forest_model)
+
+set.seed(123456)
+forest_folds <- vfold_cv(credit_train_tbl, v = 10)
+forest_grid <- grid_regular(
+  mtry(range = c(5,13)),
+  min_n(range = c(1,10))
+  )
+
+forest_tune_res <-
+  tune_grid(
+    forest_workflow,
+    resamples = forest_folds,
+    grid = forest_grid)
+
+best_params <- select_best(forest_tune_res, metric = "accuracy")
+forest_final_wf <- finalize_workflow(forest_workflow, best_params)
+forest_final_fit <- fit(forest_final_wf, credit_train_tbl)
+```
+
+```{r}
+augment(forest_final_fit, credit_test_tbl) %>%
+  class_metric(truth = Approved, estimate = .pred_class)
+
+augment(forest_final_fit, credit_test_tbl) %>%
+conf_mat(truth = Approved, estimate = .pred_class)
+```
+
+Using a random forest model, we achieved an accuracy of 84.1%, surpassing that of the Lasso Classification model. Additionally, this model exhibits a sensitivity of 81.2% and a specificity of 86.6%. However, when considering credit card approval, the misclassification of approved credit cards increases by 1 with this model. As a result, there are 18 misclassified credit card approvals and 15 misclassified credit card declines.
+
+```{r,echo=FALSE}
+extract_fit_parsnip(forest_final_fit) %>%
+vip()
+```
+
+According to the variable importance bar chart of the Random Forest model, the top five most important variables for predicting credit card approval are PriorDefault, Income, YearsEmployed, Credit Score, and Employed. 
+
+## __Conclusion__
+The Lasso classification model achieves an accuracy of approximately 83.2%, along with a specificity of around 83.9% and a sensitivity of 82.2%. In contrast, the Random Forest model performs slightly better with an accuracy of approximately 84.1%. The Random Forest model also demonstrates a higher specificity of around 86.6% and a sensitivity of about 81.2%. Therefore, the Random Forest model outperforms the Lasso classification model in terms of accuracy. 
+  The Lasso Classification model demonstrates a higher sensitivity (0.823) compared to the Random Forest model (0.812), suggesting its slightly better performance in correctly identifying instances where credit cards should be approved. On the other hand, the Random Forest model exhibits a higher specificity (0.866) compared to the Lasso Classification model (0.839), indicating its slight advantage in correctly identifying instances where credit cards should be declined. In the context of credit card approval, the primary goal is to correctly classify the maximum number of positive examples. Therefore, considering the objective of maximizing the identification of approved credit cards, the Lasso Classification model should be favored due to its slight increase in sensitivity. However, it should be noted that we obtained this sensitivity value by adjusting the threshold for Lasso classification, while the threshold for the Random Forest model was not adjusted. Overall, the Random Forest model should be chosen as it has higher accuracy than the Lasso Classification model.
+  Although both models have relatively lower accuracy rates, a previous study conducted by Harsha Vardhan Peela and colleagues in 2022 reported an accuracy rate of 86% using a combination of random forest and logistic regression. Their research identified prior default as the most significant factor influencing credit card approval.
+  Examining the feature importance in the models, the top five variables for predicting credit card approvals in the Random Forest model are prior default, income, years employed, credit score, and employment status. In the Lasso classification model, the five most important variables are income, prior default, bank customer status, marital status, and industry healthcare. Therefore, individuals applying for a credit card in the future should pay attention to these features as they can significantly impact their chances of credit card approval.
+
+## __Reference__
+Harsha Vardhan Peela, Tanuj Gupta, Nishit Rathod, Tushar Bose, & Neha Sharma. (2022). Prediction of Credit Card Approval. International Journal of Soft Computing and Engineering (IJSCE), 11(2), 1–6. https://doi.org/10.35940/ijsce.B3535.0111222
+
+
+
